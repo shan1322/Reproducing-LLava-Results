@@ -1,0 +1,16 @@
+{
+  "overall_relative_score": 21.7,
+  "total_questions_scored": 60,
+  "total_questions": 60,
+  "category_scores": {
+    "complex": 23.9,
+    "conv": 25.3,
+    "detail": 13.3
+  },
+  "paper_llava_scores": {
+    "overall": 67.3,
+    "conv": 57.3,
+    "detail": 52.5,
+    "complex": 81.7
+  }
+}
