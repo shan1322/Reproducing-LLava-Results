@@ -82,7 +82,7 @@ if __name__ == '__main__':
         image_folder='../data/CC3M/images',
         processor=processor
     )
-    dataset.data = dataset.data[:100000]
+    dataset.data = dataset.data[:50000]
 
     dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=4)
 
