@@ -166,7 +166,6 @@ outputs/evals/
 
 ## Reproducing
 
-```bash
 # Stage 1
 python code/pretraining.py
 
@@ -174,14 +173,13 @@ python code/pretraining.py
 nohup python code/finetune.py > logs/finetune.log 2>&1 &
 
 # LLaVA-Bench evaluation
-python code/run_eval.py
-python code/score_all.py
+python code/eval_itw_llava_csv_gen.py
+python code/eval_itw_llava_score.py
 
 # ScienceQA evaluation
-python code/eval_scienceqa_full.py 2>/dev/null
+python code/eval_science_qa.py 2>/dev/null
 
 # Qualitative collage
-python code/eval_samples_collage.py
-```
+python code/eval_samples.py
 
 Requires `HF_TOKEN` and `GROQ_KEY` in `.env`.
