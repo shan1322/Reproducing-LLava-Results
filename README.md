@@ -160,9 +160,7 @@ outputs/evals/
   llava_bench_scored.csv   # Per-question scores
   results_summary.json     # Aggregated LLaVA-Bench results
   scienceqa_results.json   # ScienceQA results
-```
 
----
 
 ## Reproducing
 
