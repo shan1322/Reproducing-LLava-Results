@@ -121,12 +121,12 @@ if __name__ == '__main__':
         processor=processor,
         tokenizer=tokenizer
     )
-    dataset.data = dataset.data[:50000]
+    dataset.data = dataset.data[:110000]
     
 
 
     dataloader = DataLoader(dataset, batch_size=4, shuffle=True,
-                            num_workers=4, collate_fn=collate_fn)
+                            num_workers=8, collate_fn=collate_fn)
 
     optimizer = torch.optim.AdamW(
         list(model.W_proj.parameters()) + list(model.llm.parameters()),
@@ -149,7 +149,7 @@ if __name__ == '__main__':
 
             pbar.set_postfix(loss=f"{loss.item():.4f}")
 
-            if i % 2500 == 0 and i > 0:
+            if i % 5500 == 0 and i > 0:
                 torch.save(model.W_proj.state_dict(), f'../checkpoints/W_proj_ft_step_{i}.pt')
                 torch.save(model.llm.state_dict(), f'../checkpoints/llm_ft_step_{i}.pt')
 

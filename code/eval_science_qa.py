@@ -1,8 +1,16 @@
 import os
+os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import re
 import json
 import torch
 import torch.nn as nn
+import logging
+logging.getLogger("transformers").setLevel(logging.CRITICAL)
+logging.getLogger("transformers.generation").setLevel(logging.CRITICAL)
+import warnings
+warnings.filterwarnings("ignore")
+
 from datasets import load_from_disk
 from transformers import CLIPVisionModel, CLIPProcessor, AutoTokenizer, AutoModelForCausalLM
 from dotenv import load_dotenv
@@ -14,6 +22,8 @@ os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN")
 
 OUTPUT = '../outputs/evals/scienceqa_results.json'
 os.makedirs('../outputs/evals', exist_ok=True)
+
+OPTIONS = ["A", "B", "C", "D", "E"]
 
 device = torch.device('cuda:0')
 
@@ -29,15 +39,38 @@ llm.load_state_dict(torch.load('../checkpoints/llm_ft_final.pt', map_location=de
 ds = load_from_disk('../data/scienceqa')
 samples = [s for s in ds if s['image'] is not None]
 
+def parse_answer(raw, choices, num_choices):
+    # level 1: direct letter
+    if raw in OPTIONS[:num_choices]:
+        return raw
+    # level 2: "A. " format
+    if len(raw) >= 3 and raw[0] in OPTIONS[:num_choices] and raw[1:3] == ". ":
+        return raw[0]
+    # level 3: "The answer is X"
+    pattern = re.compile(r'The answer is ([A-E])\.?')
+    res = pattern.findall(raw)
+    if len(res) == 1:
+        return res[0]
+    # level 4: match choice text in response
+    raw_lower = raw.lower()
+    for i, choice in enumerate(choices[:num_choices]):
+        if choice.lower()[:25] in raw_lower:
+            return OPTIONS[i]
+    return "FAILED"
+
 results = []
 correct_total = 0
+failed_total = 0
+answered_total = 0
 subject_stats = defaultdict(lambda: {'correct': 0, 'total': 0})
 grade_stats = defaultdict(lambda: {'correct': 0, 'total': 0})
+debug_count = 0
 
 pbar = tqdm(samples, desc="ScienceQA Eval")
 for sample in pbar:
-    choices_str = "\n".join([f"{chr(65+i)}. {c}" for i, c in enumerate(sample['choices'])])
-    prompt = f"### Human: {sample['question']}\n{choices_str}\nChoose one letter: A, B, C, or D.\n### Assistant: The answer is"
+    num_choices = len(sample['choices'])
+    choices_str = "\n".join([f"{OPTIONS[i]}. {c}" for i, c in enumerate(sample['choices'])])
+    prompt = f"### Human: {sample['question']}\n{choices_str}\n### Assistant: The answer is"
 
     image_tensor = processor(images=sample['image'], return_tensors='pt')['pixel_values'].to(torch.bfloat16).to(device)
 
@@ -49,7 +82,7 @@ for sample in pbar:
         combined = torch.cat([visual_embeds, text_embeds], dim=1)
         out = llm.generate(
             inputs_embeds=combined,
-            max_new_tokens=20,
+            max_new_tokens=10,
             do_sample=False,
             pad_token_id=tokenizer.eos_token_id,
             eos_token_id=tokenizer.eos_token_id,
@@ -57,17 +90,24 @@ for sample in pbar:
         )
 
     raw = tokenizer.decode(out[0], skip_special_tokens=True).strip()
-    match = re.search(r'\b([ABCD])\b', raw)
-    predicted = match.group(1) if match else '?'
-    correct = chr(65 + sample['answer'])
-    is_correct = predicted == correct
+    predicted = parse_answer(raw, sample['choices'], num_choices)
+    correct = OPTIONS[sample['answer']]
 
-    if is_correct:
-        correct_total += 1
-    subject_stats[sample['subject']]['total'] += 1
-    subject_stats[sample['subject']]['correct'] += int(is_correct)
-    grade_stats[sample['grade']]['total'] += 1
-    grade_stats[sample['grade']]['correct'] += int(is_correct)
+    if debug_count < 5:
+        print(f"raw={repr(raw)} | predicted={predicted} | correct={correct}", flush=True)
+        debug_count += 1
+
+    if predicted == "FAILED":
+        failed_total += 1
+    else:
+        answered_total += 1
+        is_correct = predicted == correct
+        if is_correct:
+            correct_total += 1
+        subject_stats[sample['subject']]['total'] += 1
+        subject_stats[sample['subject']]['correct'] += int(is_correct)
+        grade_stats[sample['grade']]['total'] += 1
+        grade_stats[sample['grade']]['correct'] += int(is_correct)
 
     results.append({
         'question': sample['question'],
@@ -75,19 +115,23 @@ for sample in pbar:
         'grade': sample['grade'],
         'predicted': predicted,
         'correct': correct,
-        'is_correct': is_correct
+        'is_correct': predicted == correct if predicted != "FAILED" else False
     })
 
-    acc = correct_total / len(results) * 100
-    pbar.set_postfix(acc=f"{acc:.1f}%")
+    acc = (correct_total / answered_total * 100) if answered_total > 0 else 0
+    fail_pct = (failed_total / len(results) * 100)
+    pbar.set_postfix(acc=f"{acc:.1f}%", failed=f"{fail_pct:.1f}%")
 
-overall_acc = correct_total / len(results) * 100
-subject_acc = {s: round(v['correct']/v['total']*100, 1) for s, v in subject_stats.items()}
-grade_acc = {g: round(v['correct']/v['total']*100, 1) for g, v in sorted(grade_stats.items())}
+overall_acc = (correct_total / answered_total * 100) if answered_total > 0 else 0
+subject_acc = {s: round(v['correct']/v['total']*100, 1) for s, v in subject_stats.items() if v['total'] > 0}
+grade_acc = {g: round(v['correct']/v['total']*100, 1) for g, v in sorted(grade_stats.items()) if v['total'] > 0}
 
 summary = {
     "overall_accuracy": round(overall_acc, 1),
     "total_questions": len(results),
+    "answered": answered_total,
+    "failed_parse": failed_total,
+    "failed_pct": round(failed_total / len(results) * 100, 1),
     "correct": correct_total,
     "subject_accuracy": subject_acc,
     "grade_accuracy": grade_acc,

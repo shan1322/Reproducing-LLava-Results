@@ -14,46 +14,73 @@ CSV_IN  = '../outputs/evals/llava_bench_results.csv'
 CSV_OUT = '../outputs/evals/llava_bench_scored.csv'
 RESULTS_OUT = '../outputs/evals/results_summary.json'
 
-def get_score(row, retries=3):
-    prompt = f"""You are an impartial judge evaluating the quality of an AI assistant's response to a visual question.
+def get_scores(row, retries=3):
+    prompt = f"""You are a helpful and precise assistant for checking the quality of answers.
 
-[Question]: {row['question']}
-[Image Caption]: {row['caption']}
-[Reference Answer (GPT-4)]: {row['gpt4_answer']}
-[Candidate Answer (LLaVA)]: {row['llava_answer']}
+[Context]
+{row['caption']}
 
-Compare the candidate answer to the reference answer.
-Give the candidate answer a score from 1 to 10, where:
-- 10 = equally good or better than the reference
-- 1 = completely wrong or irrelevant
+[Question]
+{row['question']}
 
-Respond in this exact JSON format:
-{{"score": <number>, "explanation": "<brief reason>"}}"""
+[Assistant 1]
+{row['gpt4_answer']}
+
+[End of Assistant 1]
+
+[Assistant 2]
+{row['llava_answer']}
+
+[End of Assistant 2]
+
+[System]
+We would like to request your feedback on the performance of two AI assistants in response to the user question displayed above.
+Please rate the helpfulness, relevance, accuracy, and level of detail of their responses.
+Give each assistant a score on a scale of 1 to 10, where a higher score indicates better overall performance.
+Please output two scores on the first line, separated by a space, like: 8 6
+Then provide a brief explanation on the second line."""
 
     for attempt in range(retries):
         try:
             response = client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=200
+                messages=[
+                    {"role": "system", "content": "You are a helpful and precise assistant for checking the quality of the answer."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=200,
+                temperature=0.2
             )
-            text = response.choices[0].message.content
-            parsed = json.loads(text)
-            return parsed['score'], parsed['explanation']
+            text = response.choices[0].message.content.strip()
+            first_line = text.split('\n')[0].replace(',', ' ').strip()
+            parts = first_line.split()
+            gpt4_score = float(parts[0])
+            llava_score = float(parts[1])
+            explanation = text.split('\n')[1] if len(text.split('\n')) > 1 else ''
+            return gpt4_score, llava_score, explanation
         except Exception as e:
             print(f"  Attempt {attempt+1} failed: {e}")
             time.sleep(2 ** attempt)
-    return None, "failed after retries"
+    return None, None, "failed after retries"
 
 with open(CSV_IN, 'r') as f:
     rows = list(csv.DictReader(f))
 
 for i, row in enumerate(rows):
     print(f"Scoring {i+1}/{len(rows)} | {row['image']} | {row['category']}")
-    score, explanation = get_score(row)
-    row['llava_score'] = score if score is not None else ''
-    row['explanation'] = explanation
-    row['relative_score'] = round((score / 10) * 100, 1) if score is not None else ''
+    gpt4_score, llava_score, explanation = get_scores(row)
+
+    if gpt4_score is not None and llava_score is not None:
+        row['gpt4_judge_score'] = gpt4_score
+        row['llava_score'] = llava_score
+        row['explanation'] = explanation
+        row['relative_score'] = round((llava_score / gpt4_score) * 100, 1) if gpt4_score > 0 else ''
+    else:
+        row['gpt4_judge_score'] = ''
+        row['llava_score'] = ''
+        row['explanation'] = explanation
+        row['relative_score'] = ''
+
     time.sleep(0.5)
 
 fieldnames = list(rows[0].keys())
